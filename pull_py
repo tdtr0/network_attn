@@ -1,0 +1,52 @@
+from datasets import load_dataset
+import requests
+from PIL import Image
+from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+
+# Setup
+output_dir = "/home/thanhdo/CSE487/laion400m_10k"
+os.makedirs(output_dir, exist_ok=True)
+images_needed = 10000
+max_workers = 48 
+
+# Load dataset (streaming)
+dataset = load_dataset("laion/laion400m", split="train", streaming=True)
+dataset_head = dataset.take(10000)
+
+# Filter URLs and captions first
+print("Filtering samples with both 'url' and 'caption'...")
+filtered_samples = [(i["url"], i["caption"]) for i in dataset_head if "url" in i and "caption" in i]
+
+# Function to download and save an image
+def download_image(idx_url_caption):
+    idx, (url, caption) = idx_url_caption
+    try:
+        response = requests.get(url, timeout=5)
+        img = Image.open(BytesIO(response.content)).convert("RGB")
+        filename = f"image_{idx:03d}.jpg"
+        img.save(os.path.join(output_dir, filename))
+        return f"{filename}\t{caption}"
+    except Exception as e:
+        print(f"Skipped idx={idx} due to error: {e}")
+        return None
+
+# Download in parallel
+print(f"Downloading up to {images_needed} images using {max_workers} threads...")
+captions = []
+with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    futures = {executor.submit(download_image, (i, data)): i for i, data in enumerate(filtered_samples[:images_needed*2])}
+    for future in as_completed(futures):
+        result = future.result()
+        if result:
+            captions.append(result)
+            if len(captions) >= images_needed:
+                break
+
+# Save captions
+if captions:
+    with open(os.path.join(output_dir, "captions.txt"), "w") as f:
+        f.write("\n".join(captions))
+
+print(f"Saved {len(captions)} images and captions to {output_dir}")
